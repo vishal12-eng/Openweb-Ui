@@ -827,6 +827,9 @@ app.include_router(retrieval.router, prefix='/api/v1/retrieval', tags=['retrieva
 
 app.include_router(configs.router, prefix='/api/v1/configs', tags=['configs'])
 
+from open_webui.env import UVICORN_WORKERS, REDIS_URL
+from open_webui.routers import tether
+app.include_router(tether.router, prefix='/api/v1/tether', tags=['tether'])
 app.include_router(auths.router, prefix='/api/v1/auths', tags=['auths'])
 app.include_router(mfa.router, prefix='/api/v1/auths/mfa', tags=['auths'])
 app.include_router(users.router, prefix='/api/v1/users', tags=['users'])
@@ -1506,7 +1509,7 @@ async def chat_completion(
 
                         asyncio.create_task(run_initial_title_generation())
                 else:
-                    chat = await Chats.get_accessible_chat_by_id(chat_id, user, permission='write')
+                    chat = await Chats.get_accessible_chat_by_id(chat_id, user, permission='write', chat=existing_chat)
                     if not chat:
                         raise HTTPException(status_code=404, detail=ERROR_MESSAGES.NOT_FOUND)
 
@@ -2360,6 +2363,9 @@ async def get_app_config(request: Request):
         'audio.stt.engine',
         'rag.file.max_size',
         'rag.file.max_count',
+        'rag.full_context',
+        'rag.bypass_embedding_and_retrieval',
+        'rag.full_context_char_threshold',
         'file.image_compression_width',
         'file.image_compression_height',
         'user.permissions',
@@ -2387,6 +2393,8 @@ async def get_app_config(request: Request):
         },
         'features': {
             'slim': USE_SLIM,
+            'auth_sessions': True,
+            'tether': ENABLE_WEBSOCKET_SUPPORT and (UVICORN_WORKERS == 1 or bool(REDIS_URL)),
             # Public: required by login/signup page pre-auth
             'auth': WEBUI_AUTH,
             'auth_trusted_header': bool(WEBUI_AUTH_TRUSTED_EMAIL_HEADER),
@@ -2496,6 +2504,10 @@ async def get_app_config(request: Request):
                 'file': {
                     'max_size': config.get('rag.file.max_size'),
                     'max_count': config.get('rag.file.max_count'),
+                    'full_context': bool(
+                        config.get('rag.full_context') or config.get('rag.bypass_embedding_and_retrieval')
+                    ),
+                    'full_text_char_threshold': config.get('rag.full_context_char_threshold'),
                     'image_compression': {
                         'width': config.get('file.image_compression_width'),
                         'height': config.get('file.image_compression_height'),

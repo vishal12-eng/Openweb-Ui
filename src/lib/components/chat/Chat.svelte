@@ -433,9 +433,7 @@
 	$: canClone = isShared && ($user?.role === 'admin' || ($user?.permissions?.chat?.import ?? true));
 	$: sideChatAllowed =
 		$user?.role === 'admin' ||
-		($user?.role === 'user' &&
-			($user.permissions?.chat?.temporary ?? true) &&
-			($user.permissions?.chat?.side_chat ?? false));
+		($user?.role === 'user' && ($user.permissions?.chat?.side_chat ?? false));
 	let cloning = false;
 
 	const cloneSharedChat = async () => {
@@ -1153,9 +1151,7 @@
 					isTerminalAvailable(terminalId) &&
 					currentModels.every((model) => model.info?.meta?.terminalId === terminalId)
 						? terminalId
-						: preserveSelections
-							? null
-							: $selectedTerminalId
+						: $selectedTerminalId
 			};
 
 			if (preserveSelections) {
@@ -1168,7 +1164,10 @@
 					codeInterpreterEnabled,
 					terminalId: $selectedTerminalId
 				};
-				modelDefaults ??= structuredClone(defaults);
+				if (!modelDefaults) {
+					modelDefaults = structuredClone(defaults);
+					defaultsModelIds = modelIds;
+				}
 				for (const key of Object.keys(defaults)) {
 					const previous = modelDefaults[key];
 					if (Array.isArray(previous)) {
@@ -1181,7 +1180,10 @@
 						defaults[key] = [
 							...new Set([...defaults[key].filter((id: string) => !removed.includes(id)), ...added])
 						];
-					} else if (current[key] !== previous) {
+					} else if (
+						(key !== 'terminalId' || equal(modelIds, defaultsModelIds)) &&
+						current[key] !== previous
+					) {
 						defaults[key] = current[key];
 					} else {
 						modelDefaults[key] = defaults[key];
@@ -1945,7 +1947,10 @@
 
 		$audioQueue?.destroy();
 
-		const audioQueueInstance = new AudioQueue(document.getElementById('audioElement'));
+		const audioQueueInstance = new AudioQueue(
+			document.getElementById('audioElement'),
+			() => $settings.responseAutoPlayback ?? false
+		);
 		audioQueue.set(audioQueueInstance);
 
 		// Restore direct terminal enabled states based on persisted selectedTerminalId
@@ -2874,36 +2879,38 @@
 		if (chatInputPrompt !== null) messageInput?.setText(chatInputPrompt);
 		if (modelSearch) await openModelSelectorWithSearch(modelSearch);
 
-		// Consume one-shot desktop event (e.g. Spotlight query, call shortcut)
-		if ($desktopEvent) {
+		// Consume call requests or the acknowledged Tether handoff.
+		if ($desktopEvent && (!$desktopEvent.handoff || !embedded)) {
 			const event = $desktopEvent;
 			desktopEvent.set(null);
 
-			if (event.type === 'call') {
+			if (event.handoff && !event.handoff.isCurrent()) {
+				event.handoff.complete('The signed-in account changed. Try again from Tether.');
+			} else if (event.type === 'call' || event.type === 'voice') {
 				openCallOverlay();
+				event.handoff?.complete(
+					$showCallOverlay
+						? undefined
+						: 'Voice mode is unavailable. Check your model, permissions and voice settings in WebUI.'
+				);
 			} else if (event.type === 'query') {
-				const query = event.data?.query;
-				const eventFiles = event.data?.files;
-
-				// Attach screenshot images from desktop (e.g. Spotlight region capture)
-				if (eventFiles?.length) {
-					for (const ef of eventFiles) {
-						files = [
-							...files,
-							{
-								type: 'image',
-								url: ef.dataUrl,
-								name: ef.name
-							}
-						];
-					}
-				}
-
-				if (query) {
-					messageInput?.setTextHandler(query, () => submitHandler(prompt));
-				} else if (eventFiles?.length) {
+				if (!messageInput) {
+					event.handoff.complete('The WebUI composer is not ready. Send again from Spotlight.');
+				} else {
+					// Replace the restored new-chat draft; do not mix in its old attachments.
+					files = event.data.files.map((file) => ({
+						type: 'image',
+						url: file.dataUrl,
+						name: file.name
+					}));
+					messageInput.setText(event.data.query ?? '');
 					await tick();
-					submitHandler('');
+					if (event.handoff.isCurrent()) {
+						event.handoff.complete();
+						void submitHandler(event.data.query ?? '');
+					} else {
+						event.handoff.complete('The handoff expired. Send again from Spotlight.');
+					}
 				}
 			}
 		} else if ($page.url.searchParams.get('q')) {
@@ -3877,6 +3884,8 @@
 	let terminalTabs: ChatTabs;
 	let fullWidthTabs = false;
 	let mainChatActive = false;
+	let mainChatStyle = '';
+	let mainChatGroupId = '';
 	let tabTitleEditor: import('svelte').Snippet | undefined;
 	let tabActions: import('svelte').Snippet | undefined;
 
@@ -5285,6 +5294,10 @@
 		? '  md:max-w-[calc(100%-var(--sidebar-width))]'
 		: ' '} w-full max-w-full min-w-0 flex flex-col"
 	id={chatContainerId}
+	role="presentation"
+	on:dragover|capture={(event) => terminalTabs?.dragOverChat(event)}
+	on:drop|capture={(event) => terminalTabs?.dropChat(event)}
+	on:dragleave={(event) => terminalTabs?.leaveChatDrop(event)}
 >
 	<div in:fade={{ duration: 50 }} class="w-full h-full flex flex-col">
 		{#if backgroundImage}
@@ -5297,14 +5310,15 @@
 			></div>
 		{/if}
 
-		<div
-			class="w-full h-full min-h-0 {fullWidthTabs
-				? 'grid grid-cols-1 grid-rows-[auto_minmax(0,1fr)_auto]'
-				: 'flex'}"
-		>
+		<div class="relative w-full h-full min-h-0 flex">
 			<div
 				class="h-full flex relative max-w-full min-w-0 min-h-0 flex-1 flex-col col-start-1 row-start-2"
 				class:hidden={fullWidthTabs && !mainChatActive}
+				style={fullWidthTabs ? mainChatStyle : undefined}
+				data-main-chat-pane
+				data-panel-group={fullWidthTabs ? mainChatGroupId : undefined}
+				on:focusin={() => fullWidthTabs && terminalTabs?.focusMainChat()}
+				on:pointerdown={() => fullWidthTabs && terminalTabs?.focusMainChat()}
 				id={fullWidthTabs ? 'chat-panel-main-chat-view' : undefined}
 				role={fullWidthTabs ? 'tabpanel' : undefined}
 				aria-labelledby={fullWidthTabs ? 'chat-panel-main-chat' : undefined}
@@ -5720,6 +5734,8 @@
 				<ChatTabs
 					bind:fullWidth={fullWidthTabs}
 					bind:mainChatActive
+					bind:mainChatStyle
+					bind:mainChatGroupId
 					title={$chatTitle || $i18n.t('New Chat')}
 					tabTitleEditor={loading ? undefined : tabTitleEditor}
 					tabActions={loading ? undefined : tabActions}
@@ -5728,9 +5744,10 @@
 					bind:files
 					chatId={$chatId}
 					bind:this={terminalTabs}
+					folderId={chat ? (chat.folder_id ?? null) : ($selectedFolder?.id ?? null)}
 					chatUser={chatOwner}
 					modelId={selectedModelIds?.at(0) ?? null}
-					canSideChat={sideChatAllowed && selectedModels.length === 1 && !!selectedModelIds[0]}
+					canSideChat={sideChatAllowed}
 					systemPrompt={params?.system || $settings.system || ''}
 					submitPrompt={submitHandler}
 					onAskFile={askFile}

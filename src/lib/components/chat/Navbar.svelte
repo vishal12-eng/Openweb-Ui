@@ -186,9 +186,9 @@
 	</Tooltip>
 {/snippet}
 
-{#snippet renderChatActions()}
+{#snippet renderTemporaryChatToggle()}
 	{#if $user?.role === 'user' ? ($user?.permissions?.chat?.temporary ?? true) && !($user?.permissions?.chat?.temporary_enforced ?? false) : true}
-		{#if !chat?.id && !tabbed}
+		{#if !chat?.id}
 			<Tooltip content={$i18n.t(`Temporary Chat`)}>
 				<button
 					class="flex size-6 cursor-pointer items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-50/40 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800/40 dark:hover:text-gray-200"
@@ -221,7 +221,14 @@
 					{/if}
 				</button>
 			</Tooltip>
-		{:else if chat?.id && $temporaryChatEnabled}
+		{/if}
+	{/if}
+{/snippet}
+
+{#snippet renderChatActions()}
+	{#if !tabbed}{@render renderTemporaryChatToggle()}{/if}
+	{#if $user?.role === 'user' ? ($user?.permissions?.chat?.temporary ?? true) && !($user?.permissions?.chat?.temporary_enforced ?? false) : true}
+		{#if chat?.id && $temporaryChatEnabled}
 			<Tooltip content={$i18n.t(`Save Chat`)}>
 				<button
 					class="flex size-6 cursor-pointer items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-50/40 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800/40 dark:hover:text-gray-200"
@@ -290,6 +297,12 @@
 
 <ShareChatModal bind:show={showShareChatModal} chatId={$chatId} />
 
+{#if tabbed && !chat?.id}
+	<div class="absolute right-2.5 top-0 z-30 flex items-center">
+		{@render renderTemporaryChatToggle()}
+	</div>
+{/if}
+
 <button
 	id="new-chat-button"
 	class="hidden"
@@ -300,12 +313,11 @@
 />
 
 <nav
-	class:hidden={tabbed}
-	class="sticky top-0 z-30 w-full {$mobile
-		? 'pt-1.5'
-		: ''} pb-1 -mb-12 flex flex-col items-center drag-region"
+	class="sticky top-0 z-30 w-full {$mobile ? 'pt-1.5' : ''} pb-1 {tabbed
+		? ''
+		: '-mb-12'} flex flex-col items-center drag-region"
 >
-	<div class="flex items-center w-full {$mobile ? 'px-1.5' : 'pl-1.5 pr-1'}">
+	<div class:hidden={tabbed} class="flex items-center w-full {$mobile ? 'px-1.5' : 'pl-1.5 pr-1'}">
 		<div
 			id="navbar-bg-gradient-to-b"
 			class="{chat?.id
@@ -381,7 +393,7 @@
 
 					{#if !tabbed}{@render renderChatActions()}{/if}
 
-					{#if history.currentId || $selectedTerminalId}
+					{#if history.currentId || $selectedTerminalId || $user?.role === 'admin' || ($user?.role === 'user' && ($user.permissions?.chat?.side_chat ?? false))}
 						<Tooltip content={$i18n.t('Tabs')}>
 							<button
 								class="flex size-6 cursor-pointer items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-50/40 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800/40 dark:hover:text-gray-200"
@@ -398,13 +410,13 @@
 		</div>
 	</div>
 
-	{#if $temporaryChatEnabled && isTemporaryChatId($chatId)}
+	{#if !tabbed && $temporaryChatEnabled && isTemporaryChatId($chatId)}
 		<div class=" w-full z-30 text-center">
 			<div class="text-xs text-gray-500">{$i18n.t('Temporary Chat')}</div>
 		</div>
 	{/if}
 
-	<div class="absolute top-[100%] left-0 right-0 h-fit">
+	<div class="absolute {tabbed ? 'top-8' : 'top-[100%]'} left-0 right-0 h-fit">
 		{#if !history.currentId && !$chatId && ($banners.length > 0 || ($config?.license_metadata?.type ?? null) === 'trial' || (($config?.license_metadata?.seats ?? null) !== null && $config?.user_count > $config?.license_metadata?.seats))}
 			<div class=" w-full z-30">
 				<div
